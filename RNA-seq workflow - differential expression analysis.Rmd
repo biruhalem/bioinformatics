@@ -1,5 +1,5 @@
 ---
-title: "RNA-seq workflow is the differential expression analysis using limma package"
+title: "RNA-seq workflow:differential gene expression analysis using limma package"
 author: "Dr Biruhalem"
 date: "7/9/2021"
 output: html_document
