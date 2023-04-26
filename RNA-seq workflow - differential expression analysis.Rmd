@@ -1,0 +1,302 @@
+---
+title: "RNA-seq workflow is the differential expression analysis using limma package"
+author: "Dr Biruhalem"
+date: "7/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##RNA-seq analysis in R
+
+#https://combine-australia.github.io/RNAseq-R/06-rnaseq-day1.html
+
+#https://master.bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html
+
+
+```{r}
+library(edgeR)
+library(limma)
+#library(org.Hs.eg.db)
+library(gplots)
+library(RColorBrewer)
+
+library(dplyr)
+```
+
+
+#Reading in the data
+
+```{r}
+
+countdata <- BulkFrontalCortex3
+
+head(countdata)
+
+sampleinfo <- read.delim("sampleinfo2.txt", stringsAsFactors = TRUE)
+
+head (countdata)
+head(sampleinfo)
+
+
+```
+
+##Convert counts to DGEList object
+Next we’ll create a DGEList object. This is an object used by edgeR to store count data. It has a number of slots for storing various parameters about the data.
+
+```{r}
+# create a DGEList object using the edgeR package:
+y <- DGEList(countdata)
+
+head(y$counts)
+
+y$samples
+
+names(y)
+
+```
+
+
+```{r}
+table(colnames(countdata) == sampleinfo$SampName)
+```
+
+
+
+
+```{r}
+#We can also store the groups for the samples in the DGEList object.
+
+group <- paste(sampleinfo$Study)
+
+group
+
+# Convert to factor
+group <- factor(group)
+
+group
+
+
+
+```
+
+```{r}
+# Add the group information into the DGEList
+y$samples$group <- group
+y$samples
+```
+
+
+# Filtering low expressed genes
+
+```{r}
+
+myCPM <- cpm(countdata)
+head(myCPM)
+thresh <- myCPM > 0.5
+head(thresh)
+
+# Summary of how many TRUEs there are in each row
+# There are ... genes that have TRUEs in all samples.
+table(rowSums(thresh))
+
+
+# we would like to keep genes that have at least 2 TRUES in each row of thresh
+keep <- rowSums(thresh) >= 2
+summary(keep)
+
+
+# Let's have a look and see whether our threshold of 0.5 does indeed correspond to a count of about 10-15
+# We will look at the first sample
+plot(myCPM[,1],countdata[,1])
+
+
+# Let us limit the x and y-axis so we can actually look to see what is happening at the smaller counts
+plot(myCPM[,1],countdata[,1],ylim=c(0,50),xlim=c(0,3))
+# Add a vertical line at 0.5 CPM
+
+
+y <- y[keep, keep.lib.sizes=FALSE]
+
+head(y)
+
+```
+
+
+#Quality control, library size distribution
+
+
+```{r}
+# we can also adjust the labelling if we want
+barplot(y$samples$lib.size/1e06, names=colnames(y), las=2, ann=FALSE, cex.names=0.75)
+mtext(side = 1, text = "Samples", line = 4)
+mtext(side = 2, text = "Library size (millions)", line = 3)
+title("Barplot of library sizes")
+```
+
+#log2 transforming per million 
+
+```{r}
+# Get log2 counts per million
+logcounts <- cpm(y,log=TRUE)
+# Check distributions of samples using boxplots
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2)
+# Let's add a blue horizontal line that corresponds to the median logCPM
+abline(h=median(logcounts),col="blue")
+title("Boxplots of logCPMs (unnormalised)")
+
+```
+
+#varaible genes in the each groups 
+
+```{r}
+# Get the gene names for the top 500 most variable genes
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:500]
+head(select_var)
+
+# Subset logcounts matrix
+highly_variable_lcpm <- logcounts[select_var,]
+dim(highly_variable_lcpm)
+
+head(highly_variable_lcpm)
+
+```
+
+
+#Normalisation for composition bias (TMM normalization)
+
+```{r}
+# Apply normalisation to DGEList object
+y <- calcNormFactors(y, method = "TMM")
+
+head(y)
+
+y$samples
+```
+
+# Defferential analysis
+
+```{r}
+# Look at group variable again
+group
+```
+
+
+
+
+```{r}
+# Specify a design matrix without an intercept term
+design <- model.matrix(~ 0 + group)
+design
+```
+
+```{r}
+## Make the column names of the design matrix a bit nicer
+colnames(design) <- levels(group)
+design
+```
+
+
+```{r}
+#Voom transform the data
+
+par(mfrow=c(1,1))
+
+v <- voom(y,design,plot = TRUE)
+
+v$targets
+
+head(v$E)
+
+```
+
+
+
+```{r}
+write.csv(v$E, file = "SSPETmmNormailizedvoom.csv")
+
+```
+
+```{r}
+par(mfrow=c(1,2))
+
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2,main="Unnormalised logCPM") 
+abline(h=median(logcounts),col="blue")
+
+## Let's add a blue horizontal line that corresponds to the median logCPM
+
+boxplot(v$E, xlab="", ylab="Log2 counts per million",las=2,main="Voom transformed logCPM")
+abline(h=median(v$E),col="blue")
+
+```
+
+
+
+
+
+
+```{r}
+cont.matrix <- makeContrasts(SSPEvsControl=SSPE - GTEx, levels = design)
+cont.matrix
+```
+
+
+
+
+```{r}
+
+par(mfrow=c(1,2))
+
+vfit <- lmFit(v, design)
+vfit <- contrasts.fit(vfit, contrasts=cont.matrix)
+efit <- eBayes(vfit)
+plotSA(efit, main="Final model: Mean-variance trend")
+
+```
+
+
+```{r}
+summary(decideTests(efit))
+```
+
+#including fold changes in the criteria 
+
+
+```{r}
+tfit <- treat(vfit, lfc=1)
+dt <- decideTests(tfit)
+summary(dt)
+
+```
+
+
+```{r}
+
+DE_SSPEvsControl_1 <- topTreat(efit, coef = 1, n=Inf)
+
+head(DE_SSPEvsControl_1)
+
+
+DE_SSPEvsControl <- topTreat(tfit, coef=1, n=Inf)
+
+head(DE_SSPEvsControl)
+
+#saving the whole differential expression analysis result
+
+write.csv(DE_SSPEvsControl, "DE_SSPEvsControl.csv")
+
+```
+
+
+```{r}
+#sorting by p-value 
+
+ttable <- topTable(tfit,coef=1,sort.by="p")
+
+head(ttable)
+```
+
+
